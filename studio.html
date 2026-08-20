@@ -40,6 +40,7 @@
   <b>ぽんぽんスタジオ(実写+AI追従ネームプレート)</b><br>
   タップ: AI翻訳字幕 / ダブルタップ: ギフト🎁 / 2本指: ハート💗<br>
   上スワイプ: おやつでHP回復 / 下スワイプ: HPダメージ<br>
+  HPは時間でも少しずつ減っていく(約30分でゼロ近くに→おやつで回復)<br>
   字幕タップ: 字幕を即消す / <b>3本指同時タップ: このガイド表示/非表示</b><br>
   <button id="start">▶ カメラ開始</button><button id="flip">カメラ切替</button>
 </div>
@@ -181,7 +182,7 @@ requestAnimationFrame(draw);
 setInterval(detect,120);
 
 // ---- 演出 ----
-const GLYPH={gift:['🎁','💝','🎀'],heart:['💗','💕','💖'],bone:['🦴','🍖','✨']};
+const GLYPH={gift:['🎁','💝','🎀'],heart:['💗','💕','💖'],bone:['🦴','🍖','✨'],angry:['💢','💥','⚡']};
 function burst(kind,count=22){
   const g=GLYPH[kind]||GLYPH.heart, W=stage.clientWidth,H=stage.clientHeight;
   for(let i=0;i<count;i++){
@@ -207,10 +208,23 @@ function hideSub(){ sub.style.opacity=0; sub.classList.remove('on'); clearTimeou
 sub.addEventListener('touchstart',e=>{e.stopPropagation();},{passive:false});
 sub.addEventListener('touchend',e=>{e.stopPropagation();e.preventDefault();hideSub();});
 sub.addEventListener('click',e=>{e.stopPropagation();hideSub();});
+function floatText(txt,color){
+  const el=document.createElement('div'); el.className='p'; el.textContent=txt;
+  el.style.cssText=`left:50%;top:30%;font-size:54px;font-weight:900;color:${color};
+    text-shadow:0 2px 8px rgba(0,0,0,.6);transform:translateX(-50%);`;
+  stage.appendChild(el);
+  el.animate([{transform:'translate(-50%,0) scale(.6)',opacity:0},
+    {transform:'translate(-50%,-30px) scale(1.15)',opacity:1,offset:.25},
+    {transform:'translate(-50%,-110px) scale(1)',opacity:0}],{duration:1500,easing:'ease-out'});
+  setTimeout(()=>el.remove(),1550);
+}
 function hpChange(d){
   hp=Math.max(5,Math.min(100,hp+d));
-  if(d>0) burst('bone',14);
+  if(d>0){ burst('bone',14); floatText('+'+d,'#7dff8a'); }
+  else if(d<0){ burst('angry',12); floatText(''+d,'#ff5f5f'); flashRed(1); }
 }
+// 時間経過でHPが自然減少(約30分で100→フロア。おやつ=上スワイプで回復)
+setInterval(()=>{ if(hp>5) hp-=1; },18000);
 
 // ---- タッチ ----
 let t0=null,moved=false,lp=null,lastTap=0,singleT=null,dy=0;
