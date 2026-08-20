@@ -16,7 +16,8 @@
   .p{position:absolute;will-change:transform,opacity;pointer-events:none;font-size:34px;}
   #sub{position:absolute;left:50%;bottom:28%;transform:translateX(-50%);max-width:86%;
     background:rgba(20,16,40,.82);color:#fff;border:2px solid rgba(255,215,110,.9);border-radius:18px;
-    padding:12px 18px;font-size:17px;line-height:1.5;opacity:0;transition:opacity .25s;text-align:center;}
+    padding:12px 18px;font-size:17px;line-height:1.5;opacity:0;transition:opacity .25s;text-align:center;pointer-events:none;}
+  #sub.on{pointer-events:auto;}
   #sub b{color:#ffd76e;font-size:13px;display:block;margin-bottom:2px;}
   #hud{position:fixed;inset:auto 12px 20px 12px;z-index:9;background:rgba(0,0,0,.82);color:#fff;
     border-radius:16px;padding:14px 16px;font-size:14px;line-height:1.85;transition:opacity .4s;}
@@ -39,7 +40,7 @@
   <b>ぽんぽんスタジオ(実写+AI追従ネームプレート)</b><br>
   タップ: AI翻訳字幕 / ダブルタップ: ギフト🎁 / 2本指: ハート💗<br>
   上スワイプ: おやつでHP回復 / 下スワイプ: HPダメージ<br>
-  長押し: このガイド表示/非表示<br>
+  字幕タップ: 字幕を即消す / <b>3本指同時タップ: このガイド表示/非表示</b><br>
   <button id="start">▶ カメラ開始</button><button id="flip">カメラ切替</button>
 </div>
 <script src="ort/ort.wasm.min.js"></script>
@@ -199,9 +200,13 @@ function burst(kind,count=22){
 function showSub(){
   sub.innerHTML='<b>🤖 ぽんぽん語 AI翻訳</b>'+PHRASES[phraseIdx%PHRASES.length];
   phraseIdx++;
-  sub.style.opacity=1;
-  clearTimeout(subTimer); subTimer=setTimeout(()=>sub.style.opacity=0,3800);
+  sub.style.opacity=1; sub.classList.add('on');
+  clearTimeout(subTimer); subTimer=setTimeout(hideSub,3800);
 }
+function hideSub(){ sub.style.opacity=0; sub.classList.remove('on'); clearTimeout(subTimer); }
+sub.addEventListener('touchstart',e=>{e.stopPropagation();},{passive:false});
+sub.addEventListener('touchend',e=>{e.stopPropagation();e.preventDefault();hideSub();});
+sub.addEventListener('click',e=>{e.stopPropagation();hideSub();});
 function hpChange(d){
   hp=Math.max(5,Math.min(100,hp+d));
   if(d>0) burst('bone',14);
@@ -210,9 +215,9 @@ function hpChange(d){
 // ---- タッチ ----
 let t0=null,moved=false,lp=null,lastTap=0,singleT=null,dy=0;
 stage.addEventListener('touchstart',e=>{
+  if(e.touches.length===3){hud.classList.toggle('hidden');t0=null;return;}
   if(e.touches.length===2){burst('heart');clearTimeout(lp);return;}
   const t=e.touches[0]; t0={x:t.clientX,y:t.clientY}; moved=false; dy=0;
-  lp=setTimeout(()=>{hud.classList.toggle('hidden');t0=null;},650);
 },{passive:false});
 stage.addEventListener('touchmove',e=>{
   if(!t0)return; const t=e.touches[0];
