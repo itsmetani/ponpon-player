@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ぽんぽんスタジオ</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:sans-serif;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
+  #stage{position:relative;width:100vw;height:100dvh;overflow:hidden;background:#000;touch-action:none;}
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  #ov{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+  .p{position:absolute;will-change:transform,opacity;pointer-events:none;font-size:34px;}
+  #sub{position:absolute;left:50%;bottom:28%;transform:translateX(-50%);max-width:86%;
+    background:rgba(20,16,40,.82);color:#fff;border:2px solid rgba(255,215,110,.9);border-radius:18px;
+    padding:12px 18px;font-size:17px;line-height:1.5;opacity:0;transition:opacity .25s;text-align:center;}
+  #sub b{color:#ffd76e;font-size:13px;display:block;margin-bottom:2px;}
+  #hud{position:fixed;inset:auto 12px 20px 12px;z-index:9;background:rgba(0,0,0,.82);color:#fff;
+    border-radius:16px;padding:14px 16px;font-size:14px;line-height:1.85;transition:opacity .4s;}
+  #hud.hidden{opacity:0;pointer-events:none;}
+  #hud b{color:#ffd76e;}
+  #hud button{font-size:16px;font-weight:bold;padding:10px 16px;border-radius:12px;border:none;margin:6px 8px 2px 0;}
+  #start{background:#ff2c55;color:#fff;}
+  #flip{background:#eee;}
+  #st{position:fixed;top:calc(env(safe-area-inset-top, 0px) + 6px);left:10px;color:rgba(255,255,255,.55);font-size:11px;z-index:8;}
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="ov"></canvas>
+  <div id="sub"></div>
+</div>
+<div id="st"></div>
+<div id="hud">
+  <b>ぽんぽんスタジオ(実写+AI追従ネームプレート)</b><br>
+  タップ: AI翻訳字幕 / ダブルタップ: ギフト🎁 / 2本指: ハート💗<br>
+  上スワイプ: おやつでHP回復 / 下スワイプ: HPダメージ<br>
+  長押し: このガイド表示/非表示<br>
+  <button id="start">▶ カメラ開始</button><button id="flip">カメラ切替</button>
+</div>
+<script src="ort/ort.wasm.min.js"></script>
+<script>
+const stage=document.getElementById('stage'), cam=document.getElementById('cam'),
+      ov=document.getElementById('ov'), ctx=ov.getContext('2d'),
+      hud=document.getElementById('hud'), sub=document.getElementById('sub'), st=document.getElementById('st');
+let session=null, facing='environment', stream=null;
+let box=null, boxAlpha=0, lastSeen=0, hp=100, hpDisp=100, level=5;
+const PHRASES=[
+ "おやつをよこせ、と言っています",
+ "パパの漫談がつまらない、と言っています",
+ "革命はまだか、と言っています",
+ "30分契約を忘れるな、と言っています",
+ "フォローしていけ、と言っています",
+ "ハートミーを要求しています",
+ "そろそろ眠い、と言っています",
+ "桃太郎に宣戦布告しています",
+ "ペットリーグを作る、と言っています",
+ "君のことが好きだ、と言っています"
+];
+let phraseIdx=0, subTimer=null;
+
+// ---- カメラ ----
+async function startCam(){
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:facing, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    cam.srcObject = stream; await cam.play();
+    hud.classList.add('hidden');
+    try{ await navigator.wakeLock.request('screen'); }catch(e){}
+  }catch(e){ st.textContent='カメラ起動失敗: '+e.name; }
+}
+document.getElementById('start').onclick=startCam;
+document.getElementById('flip').onclick=()=>{facing = facing==='environment'?'user':'environment'; startCam();};
+
+// ---- モデル ----
+const CLS={15:'cat',16:'dog',21:'bear',77:'teddy'};
+(async()=>{
+  try{
+    ort.env.wasm.numThreads=1;
+    ort.env.wasm.wasmPaths=new URL('ort/',document.baseURI).href;
+    st.textContent='AIモデル読込中…';
+    session = await ort.InferenceSession.create('model.onnx',{executionProviders:['wasm']});
+    st.textContent='';
+  }catch(e){ st.textContent='モデル読込失敗(ネームプレートなしで動作): '+e.message; }
+})();
+
+const S=320;
+const work=document.createElement('canvas'); work.width=S; work.height=S;
+const wctx=work.getContext('2d',{willReadFrequently:true});
+let busy=false, lastDet=0;
+
+async function detect(){
+  if(!session||busy||cam.readyState<2) return;
+  if(performance.now()-lastDet<200) return;
+  busy=true; lastDet=performance.now();
+  try{
+    const vw=cam.videoWidth, vh=cam.videoHeight;
+    const sc=Math.min(S/vw,S/vh), nw=vw*sc, nh=vh*sc, px=(S-nw)/2, py=(S-nh)/2;
+    wctx.fillStyle='#727272'; wctx.fillRect(0,0,S,S);
+    wctx.drawImage(cam,px,py,nw,nh);
+    const d=wctx.getImageData(0,0,S,S).data;
+    const inp=new Float32Array(3*S*S);
+    for(let i=0,n=S*S;i<n;i++){ inp[i]=d[i*4]/255; inp[n+i]=d[i*4+1]/255; inp[2*n+i]=d[i*4+2]/255; }
+    const out=(await session.run({images:new ort.Tensor('float32',inp,[1,3,S,S])}));
+    const t=out[Object.keys(out)[0]]; // [1,84,N]
+    const N=t.dims[2], data=t.data;
+    let best=null;
+    for(const c of [15,16,21,77]){
+      for(let i=0;i<N;i++){
+        const conf=data[(4+c)*N+i];
+        if(conf>0.35 && (!best||conf>best.conf)){
+          best={conf, cx:data[i], cy:data[N+i], w:data[2*N+i], h:data[3*N+i]};
+        }
+      }
+    }
+    if(best){
+      // model coords -> video coords
+      const bx=(best.cx-px)/sc, by=(best.cy-py)/sc, bw=best.w/sc, bh=best.h/sc;
+      const nb={x:bx,y:by,w:bw,h:bh};
+      box = box ? {x:box.x*.65+nb.x*.35, y:box.y*.65+nb.y*.35, w:box.w*.65+nb.w*.35, h:box.h*.65+nb.h*.35} : nb;
+      lastSeen=performance.now();
+    }
+  }catch(e){ st.textContent='det err'; }
+  busy=false;
+}
+
+// video coords -> screen coords (object-fit: cover)
+function v2s(x,y){
+  const cw=stage.clientWidth, ch=stage.clientHeight, vw=cam.videoWidth, vh=cam.videoHeight;
+  const sc=Math.max(cw/vw,ch/vh);
+  return [x*sc+(cw-vw*sc)/2, y*sc+(ch-vh*sc)/2, sc];
+}
+
+function draw(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  if(ov.width!==stage.clientWidth*dpr){ ov.width=stage.clientWidth*dpr; ov.height=stage.clientHeight*dpr; }
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,ov.width,ov.height);
+  const since=performance.now()-lastSeen;
+  boxAlpha += ((box&&since<2500)?1:0 - boxAlpha)*0.12;
+  if(box&&boxAlpha>0.02){
+    const [sx,sy,sc]=v2s(box.x,box.y);
+    const bw=box.w*sc;
+    const topY=sy-box.h*sc/2;
+    ctx.globalAlpha=Math.max(0,Math.min(1,boxAlpha));
+    // ネームプレート
+    const W=Math.max(190,Math.min(260,bw*0.9)), H=64;
+    const x=sx-W/2, y=Math.max(56,topY-H-14);
+    ctx.fillStyle='rgba(20,16,40,.78)';
+    ctx.strokeStyle='rgba(255,215,110,.95)'; ctx.lineWidth=2.5;
+    r(x,y,W,H,14); ctx.fill(); ctx.stroke();
+    ctx.fillStyle='#fff'; ctx.font='bold 19px sans-serif'; ctx.textAlign='left';
+    ctx.fillText('👑 ぽんぽん', x+12, y+25);
+    ctx.fillStyle='#ffd76e'; ctx.font='bold 13px sans-serif'; ctx.textAlign='right';
+    ctx.fillText('Lv.'+level+' 革命家', x+W-12, y+25);
+    // HPバー
+    hpDisp+= (hp-hpDisp)*0.1;
+    const bx2=x+12, by2=y+38, bw2=W-24, bh2=13;
+    ctx.fillStyle='rgba(255,255,255,.25)'; r(bx2,by2,bw2,bh2,6); ctx.fill();
+    const g=ctx.createLinearGradient(bx2,0,bx2+bw2,0);
+    const ratio=hpDisp/100;
+    g.addColorStop(0, ratio>0.4?'#7dff8a':'#ff7d7d'); g.addColorStop(1, ratio>0.4?'#2ecc71':'#e74c3c');
+    ctx.fillStyle=g; r(bx2,by2,Math.max(6,bw2*ratio),bh2,6); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('HP '+Math.round(hpDisp)+' / 100', bx2+bw2/2, by2+10.5);
+    // 接続線
+    ctx.strokeStyle='rgba(255,215,110,.8)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(sx,y+H); ctx.lineTo(sx,Math.max(y+H,topY-2)); ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+  requestAnimationFrame(draw);
+}
+function r(x,y,w,h,rad){ctx.beginPath();ctx.roundRect(x,y,w,h,rad);}
+requestAnimationFrame(draw);
+setInterval(detect,120);
+
+// ---- 演出 ----
+const GLYPH={gift:['🎁','💝','🎀'],heart:['💗','💕','💖'],bone:['🦴','🍖','✨']};
+function burst(kind,count=22){
+  const g=GLYPH[kind]||GLYPH.heart, W=stage.clientWidth,H=stage.clientHeight;
+  for(let i=0;i<count;i++){
+    const el=document.createElement('div'); el.className='p'; el.textContent=g[i%g.length];
+    el.style.fontSize=(22+Math.random()*36)+'px';
+    el.style.left=Math.random()*W+'px'; el.style.top=H+'px';
+    stage.appendChild(el);
+    const drift=(Math.random()-0.5)*150, dur=2200+Math.random()*1500, delay=Math.random()*450;
+    el.animate([
+      {transform:'translate(0,0)',opacity:0},{opacity:1,offset:.12},
+      {transform:`translate(${drift}px,-${H*0.85}px) rotate(${(Math.random()-0.5)*60}deg)`,opacity:0}
+    ],{duration:dur,delay:delay,easing:'cubic-bezier(.2,.6,.4,1)'});
+    setTimeout(()=>el.remove(),dur+delay+100);
+  }
+}
+function showSub(){
+  sub.innerHTML='<b>🤖 ぽんぽん語 AI翻訳</b>'+PHRASES[phraseIdx%PHRASES.length];
+  phraseIdx++;
+  sub.style.opacity=1;
+  clearTimeout(subTimer); subTimer=setTimeout(()=>sub.style.opacity=0,3800);
+}
+function hpChange(d){
+  hp=Math.max(5,Math.min(100,hp+d));
+  if(d>0) burst('bone',14);
+}
+
+// ---- タッチ ----
+let t0=null,moved=false,lp=null,lastTap=0,singleT=null,dy=0;
+stage.addEventListener('touchstart',e=>{
+  if(e.touches.length===2){burst('heart');clearTimeout(lp);return;}
+  const t=e.touches[0]; t0={x:t.clientX,y:t.clientY}; moved=false; dy=0;
+  lp=setTimeout(()=>{hud.classList.toggle('hidden');t0=null;},650);
+},{passive:false});
+stage.addEventListener('touchmove',e=>{
+  if(!t0)return; const t=e.touches[0];
+  dy=t.clientY-t0.y;
+  if(Math.abs(t.clientX-t0.x)>10||Math.abs(dy)>10){moved=true;clearTimeout(lp);}
+  e.preventDefault();
+},{passive:false});
+stage.addEventListener('touchend',e=>{
+  clearTimeout(lp); if(!t0)return;
+  if(moved){
+    if(dy<-60) hpChange(+20);
+    else if(dy>60) hpChange(-15);
+  }else{
+    const now=Date.now();
+    if(now-lastTap<300){clearTimeout(singleT);burst('gift');lastTap=0;}
+    else{lastTap=now;singleT=setTimeout(showSub,300);}
+  }
+  t0=null;
+});
+addEventListener('keydown',e=>{ // PCテスト用
+  if(e.key==='t')showSub(); if(e.key==='g')burst('gift'); if(e.key==='l')burst('heart');
+  if(e.key==='u')hpChange(20); if(e.key==='d')hpChange(-15); if(e.key==='h')hud.classList.toggle('hidden');
+  if(e.key==='c')startCam();
+});
+</script>
+</body>
+</html>
