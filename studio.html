@@ -52,9 +52,10 @@
   <b>「プレート非表示」= 字幕とエフェクトだけのシンプル表示(iPhone単体配信向け)</b><br>
   <b>配信前に「準備OK」でこのガイドを消すこと(キー H でも切替)</b><br>
   <b>🖥 ウィンドウから取り込む = Camo Studioの画面を映像として使う(仮想カメラ不要)</b><br>
-  <b>取り込み後の調整: Z/X=拡大縮小 / 矢印キー=位置 / 0=リセット</b><br>
+  <b>取り込み後: 画面をドラッグして使う範囲を囲む(やり直しは「⬚ 範囲を選択」またはKキー / 0=解除)</b><br>
   <button id="start">▶ カメラ開始</button><button id="flip">前後切替</button><button id="rotate">画面を回転</button><button id="simple">表示切替</button>
   <br><button id="grab" style="background:#3e6fc4;color:#fff">🖥 ウィンドウから取り込む</button>
+  <button id="croparea" style="background:#b8860b;color:#fff">⬚ 範囲を選択</button>
   <button id="ready" style="background:#1e7d46;color:#fff">✓ 準備OK(ガイドを隠す)</button>
   <br><select id="camsel" style="font-size:15px;padding:8px;border-radius:10px;margin-top:8px;max-width:92%"><option>カメラ開始を押してください</option></select>
 </div>
@@ -68,18 +69,41 @@ let rot=0; try{ rot=+(localStorage.getItem('ponpon_rot')||0)||0; }catch(e){}
 let devId=null; try{ devId=localStorage.getItem('ponpon_cam')||null; }catch(e){}
 // シンプルモード: ネームプレート(Lv/HP)を隠し、AI検出も止める(字幕・エフェクトのみ)
 let simple=false; try{ simple=localStorage.getItem('ponpon_simple')==='1'; }catch(e){}
-// 切り抜き(ウィンドウ取り込み時にCamoのUI部分を除くため)
-let zoom=1, offX=0, offY=0;
-try{ const c=JSON.parse(localStorage.getItem('ponpon_crop')||'{}');
-  if(c.zoom) zoom=c.zoom; if(c.offX!=null) offX=c.offX; if(c.offY!=null) offY=c.offY; }catch(e){}
-function saveCrop(){ try{ localStorage.setItem('ponpon_crop',JSON.stringify({zoom,offX,offY})); }catch(e){} }
-// 取り込み範囲(元映像のピクセル座標)
+// 切り抜き: 画面上をドラッグして「使う範囲」を自由な四角で指定する
+let crop=null;      // {x,y,w,h} 0〜1の割合で保存
+let selecting=false, dragA=null, dragB=null;
+try{ const c=JSON.parse(localStorage.getItem('ponpon_croprect')||'null'); if(c&&c.w>0&&c.h>0) crop=c; }catch(e){}
+function saveCrop(){ try{ localStorage.setItem('ponpon_croprect',JSON.stringify(crop)); }catch(e){} }
 function srcRect(){
   const W=cam.videoWidth||1, H=cam.videoHeight||1;
-  const sw=W/zoom, sh=H/zoom;
-  let x=(W-sw)/2 + offX*W, y=(H-sh)/2 + offY*H;
-  x=Math.max(0,Math.min(W-sw,x)); y=Math.max(0,Math.min(H-sh,y));
-  return {x,y,sw,sh};
+  if(!crop) return {x:0,y:0,sw:W,sh:H};
+  return {x:crop.x*W, y:crop.y*H, sw:crop.w*W, sh:crop.h*H};
+}
+// 選択モード中の表示マッピング(全体が見えるcontain配置)
+function containMap(){
+  const cw=stage.clientWidth, ch=stage.clientHeight, W=cam.videoWidth||1, H=cam.videoHeight||1;
+  const s=Math.min(cw/W, ch/H);
+  return {s, ox:(cw-W*s)/2, oy:(ch-H*s)/2, W, H};
+}
+function startSelect(){
+  if(!cam.videoWidth){ st.textContent='先に映像を取り込んでください'; return; }
+  hud.classList.add('hidden');      // ガイドが操作を邪魔しないよう隠す
+  selecting=true; dragA=dragB=null;
+  st.textContent='使う範囲をドラッグで囲んでください(Escで中止)';
+}
+function finishSelect(){
+  if(dragA&&dragB){
+    const m=containMap();
+    const x1=Math.min(dragA.x,dragB.x), y1=Math.min(dragA.y,dragB.y);
+    const x2=Math.max(dragA.x,dragB.x), y2=Math.max(dragA.y,dragB.y);
+    const sx1=Math.max(0,Math.min(m.W,(x1-m.ox)/m.s)), sy1=Math.max(0,Math.min(m.H,(y1-m.oy)/m.s));
+    const sx2=Math.max(0,Math.min(m.W,(x2-m.ox)/m.s)), sy2=Math.max(0,Math.min(m.H,(y2-m.oy)/m.s));
+    if(sx2-sx1>20 && sy2-sy1>20){
+      crop={x:sx1/m.W, y:sy1/m.H, w:(sx2-sx1)/m.W, h:(sy2-sy1)/m.H};
+      saveCrop();
+    }
+  }
+  selecting=false; dragA=dragB=null; st.textContent='';
 }
 function setRot(r){ rot=((r%360)+360)%360; try{ localStorage.setItem('ponpon_rot',String(rot)); }catch(e){} }
 function vdim(){ const r=rot%180!==0, s=srcRect();
@@ -184,14 +208,22 @@ document.getElementById('start').onclick=startCam;
 document.getElementById('flip').onclick=()=>{facing = facing==='environment'?'user':'environment'; startCam();};
 document.getElementById('rotate').onclick=()=>setRot(rot+90);
 document.getElementById('ready').onclick=()=>hud.classList.add('hidden');
+document.getElementById('croparea').onclick=()=>{ hud.classList.add('hidden'); startSelect(); };
+// ドラッグ操作(マウス/タッチ)
+function ptr(e){ const r=stage.getBoundingClientRect();
+  const p=e.touches?e.touches[0]:e; return {x:p.clientX-r.left, y:p.clientY-r.top}; }
+stage.addEventListener('mousedown',e=>{ if(!selecting)return; dragA=ptr(e); dragB=dragA; e.preventDefault(); });
+stage.addEventListener('mousemove',e=>{ if(!selecting||!dragA)return; dragB=ptr(e); });
+stage.addEventListener('mouseup',e=>{ if(!selecting)return; dragB=ptr(e); finishSelect(); });
+addEventListener('keydown',e=>{ if(e.key==='Escape'&&selecting){ selecting=false; dragA=dragB=null; st.textContent=''; } });
 // Camo Studio等のウィンドウをそのまま映像ソースにする(仮想カメラ不要)
 document.getElementById('grab').onclick=async()=>{
   try{
     if(stream) stream.getTracks().forEach(t=>t.stop());
     stream = await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:false});
     cam.srcObject=stream; await cam.play();
-    st.textContent='取り込み中: Z/X=拡大縮小 矢印=位置 0=リセット';
-    setTimeout(()=>{ if(st.textContent.startsWith('取り込み中')) st.textContent=''; },8000);
+    hud.classList.add('hidden');
+    setTimeout(startSelect, 400);   // 取り込んだらすぐ範囲選択へ
   }catch(e){ st.textContent='取り込み失敗: '+e.name; }
 };
 (function(){
@@ -274,6 +306,21 @@ function draw(){
   if(ov.width!==stage.clientWidth*dpr){ ov.width=stage.clientWidth*dpr; ov.height=stage.clientHeight*dpr; }
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,ov.width,ov.height);
+  if(selecting && cam.readyState>=2 && cam.videoWidth){
+    const m=containMap();
+    ctx.drawImage(cam, m.ox, m.oy, m.W*m.s, m.H*m.s);
+    ctx.fillStyle='rgba(0,0,0,.45)'; ctx.fillRect(0,0,stage.clientWidth,stage.clientHeight);
+    if(dragA&&dragB){
+      const x=Math.min(dragA.x,dragB.x), y=Math.min(dragA.y,dragB.y);
+      const w=Math.abs(dragB.x-dragA.x), hh=Math.abs(dragB.y-dragA.y);
+      ctx.save(); ctx.beginPath(); ctx.rect(x,y,w,hh); ctx.clip();
+      ctx.drawImage(cam, m.ox, m.oy, m.W*m.s, m.H*m.s); ctx.restore();
+      ctx.strokeStyle='#ffd76e'; ctx.lineWidth=2; ctx.strokeRect(x,y,w,hh);
+    }
+    ctx.fillStyle='#fff'; ctx.font='bold 15px sans-serif'; ctx.textAlign='center';
+    ctx.fillText('使う範囲をドラッグで囲む', stage.clientWidth/2, 30);
+    requestAnimationFrame(draw); return;
+  }
   if(cam.readyState>=2 && cam.videoWidth){
     const cw=stage.clientWidth, ch=stage.clientHeight, {vw,vh}=vdim(), r=srcRect();
     const s=Math.max(cw/vw,ch/vh);
@@ -508,13 +555,8 @@ addEventListener('keydown',e=>{ // PCテスト用
   if(e.key==='u')hpChange(20); if(e.key==='d')hpChange(-15); if(e.key==='h')hud.classList.toggle('hidden');
   if(e.key==='c')startCam();
   if(e.key==='r'||e.key==='R')setRot(rot+90);
-  if(e.key==='z'||e.key==='Z'){ zoom=Math.min(4,zoom*1.08); saveCrop(); }
-  if(e.key==='x'||e.key==='X'){ zoom=Math.max(1,zoom/1.08); saveCrop(); }
-  if(e.key==='ArrowLeft'){ offX-=0.01; saveCrop(); }
-  if(e.key==='ArrowRight'){ offX+=0.01; saveCrop(); }
-  if(e.key==='ArrowUp'){ offY-=0.01; saveCrop(); }
-  if(e.key==='ArrowDown'){ offY+=0.01; saveCrop(); }
-  if(e.key==='0'){ zoom=1; offX=0; offY=0; saveCrop(); }
+  if(e.key==='0'){ crop=null; saveCrop(); }
+  if(e.key==='k'||e.key==='K') startSelect();
 });
 </script>
 </body>
