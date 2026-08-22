@@ -11,7 +11,7 @@
   html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:sans-serif;
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
   #stage{position:relative;width:100vw;height:100dvh;overflow:hidden;background:#000;touch-action:none;}
-  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}
+  #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;pointer-events:none;}
   #ov{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
   .p{position:absolute;will-change:transform,opacity;pointer-events:none;font-size:34px;}
   #sub{position:absolute;left:50%;bottom:28%;transform:translateX(-50%);max-width:86%;
@@ -48,7 +48,8 @@
   上スワイプ: おやつでHP回復 / 下スワイプ: HPダメージ<br>
   HPは時間でも少しずつ減っていく(約30分でゼロ近くに→おやつで回復)<br>
   字幕タップ: 字幕を即消す / <b>3本指同時タップ: このガイド表示/非表示</b><br>
-  <button id="start">▶ カメラ開始</button><button id="flip">カメラ切替</button>
+  <b>横向きの映像が来るときは「画面を回転」(キー R)で縦にできます</b><br>
+  <button id="start">▶ カメラ開始</button><button id="flip">カメラ切替</button><button id="rotate">画面を回転</button>
 </div>
 <script src="ort/ort.wasm.min.js"></script>
 <script>
@@ -56,6 +57,10 @@ const stage=document.getElementById('stage'), cam=document.getElementById('cam')
       ov=document.getElementById('ov'), ctx=ov.getContext('2d'),
       hud=document.getElementById('hud'), sub=document.getElementById('sub'), st=document.getElementById('st');
 let session=null, facing='environment', stream=null;
+let rot=0; try{ rot=+(localStorage.getItem('ponpon_rot')||0)||0; }catch(e){}
+function setRot(r){ rot=((r%360)+360)%360; try{ localStorage.setItem('ponpon_rot',String(rot)); }catch(e){} }
+function vdim(){ const r=rot%180!==0;
+  return { vw: r?cam.videoHeight:cam.videoWidth, vh: r?cam.videoWidth:cam.videoHeight }; }
 let box=null, boxAlpha=0, lastSeen=0, hp=100, hpDisp=100, level=5, exp=0;
 // セッション制: 配信ごとにLv.1から。歴代最高レベルだけ記録として保存
 level=1; exp=0;
@@ -123,6 +128,7 @@ async function startCam(){
 }
 document.getElementById('start').onclick=startCam;
 document.getElementById('flip').onclick=()=>{facing = facing==='environment'?'user':'environment'; startCam();};
+document.getElementById('rotate').onclick=()=>setRot(rot+90);
 
 // ---- モデル ----
 const CLS={15:'cat',16:'dog',21:'bear',77:'teddy'};
@@ -149,10 +155,14 @@ async function detect(){
   if(performance.now()-lastDet<DET_MS) return;
   busy=true; lastDet=performance.now();
   try{
-    const vw=cam.videoWidth, vh=cam.videoHeight;
-    const sc=Math.min(S/vw,S/vh), nw=vw*sc, nh=vh*sc, px=(S-nw)/2, py=(S-nh)/2;
+    const {vw,vh}=vdim();
+    const sc=Math.min(S/vw,S/vh), px=(S-vw*sc)/2, py=(S-vh*sc)/2;
     wctx.fillStyle='#727272'; wctx.fillRect(0,0,S,S);
-    wctx.drawImage(cam,px,py,nw,nh);
+    wctx.save();
+    wctx.translate(px+vw*sc/2, py+vh*sc/2);
+    wctx.rotate(rot*Math.PI/180);
+    wctx.drawImage(cam, -cam.videoWidth*sc/2, -cam.videoHeight*sc/2, cam.videoWidth*sc, cam.videoHeight*sc);
+    wctx.restore();
     const d=wctx.getImageData(0,0,S,S).data;
     const inp=new Float32Array(3*S*S);
     for(let i=0,n=S*S;i<n;i++){ inp[i]=d[i*4]/255; inp[n+i]=d[i*4+1]/255; inp[2*n+i]=d[i*4+2]/255; }
@@ -181,7 +191,7 @@ async function detect(){
 
 // video coords -> screen coords (object-fit: cover)
 function v2s(x,y){
-  const cw=stage.clientWidth, ch=stage.clientHeight, vw=cam.videoWidth, vh=cam.videoHeight;
+  const cw=stage.clientWidth, ch=stage.clientHeight, {vw,vh}=vdim();
   const sc=Math.max(cw/vw,ch/vh);
   return [x*sc+(cw-vw*sc)/2, y*sc+(ch-vh*sc)/2, sc];
 }
@@ -191,6 +201,15 @@ function draw(){
   if(ov.width!==stage.clientWidth*dpr){ ov.width=stage.clientWidth*dpr; ov.height=stage.clientHeight*dpr; }
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,ov.width,ov.height);
+  if(cam.readyState>=2 && cam.videoWidth){
+    const cw=stage.clientWidth, ch=stage.clientHeight, {vw,vh}=vdim();
+    const s=Math.max(cw/vw,ch/vh);
+    ctx.save();
+    ctx.translate((cw-vw*s)/2+vw*s/2, (ch-vh*s)/2+vh*s/2);
+    ctx.rotate(rot*Math.PI/180);
+    ctx.drawImage(cam, -cam.videoWidth*s/2, -cam.videoHeight*s/2, cam.videoWidth*s, cam.videoHeight*s);
+    ctx.restore();
+  }
   const since=performance.now()-lastSeen;
   boxAlpha += ((box&&since<2500)?1:0 - boxAlpha)*0.12;
   if(box&&boxAlpha>0.02){
@@ -416,6 +435,7 @@ addEventListener('keydown',e=>{ // PCテスト用
   if(e.key==='t')showSub(); if(e.key==='g')burst('gift'); if(e.key==='l')burst('heart');
   if(e.key==='u')hpChange(20); if(e.key==='d')hpChange(-15); if(e.key==='h')hud.classList.toggle('hidden');
   if(e.key==='c')startCam();
+  if(e.key==='r'||e.key==='R')setRot(rot+90);
 });
 </script>
 </body>
