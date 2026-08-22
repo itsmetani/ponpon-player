@@ -48,8 +48,10 @@
   上スワイプ: おやつでHP回復 / 下スワイプ: HPダメージ<br>
   HPは時間でも少しずつ減っていく(約30分でゼロ近くに→おやつで回復)<br>
   字幕タップ: 字幕を即消す / <b>3本指同時タップ: このガイド表示/非表示</b><br>
-  <b>横向きの映像が来るときは「画面を回転」(キー R)で縦にできます</b><br>
-  <button id="start">▶ カメラ開始</button><button id="flip">カメラ切替</button><button id="rotate">画面を回転</button>
+  <b>カメラ開始 → 下のメニューで「Camo」を選ぶ。横向きなら「画面を回転」(キー R)</b><br>
+  <b>「プレート非表示」= 字幕とエフェクトだけのシンプル表示(iPhone単体配信向け)</b><br>
+  <button id="start">▶ カメラ開始</button><button id="flip">前後切替</button><button id="rotate">画面を回転</button><button id="simple">表示切替</button>
+  <br><select id="camsel" style="font-size:15px;padding:8px;border-radius:10px;margin-top:8px;max-width:92%"><option>カメラ開始を押してください</option></select>
 </div>
 <script src="ort/ort.wasm.min.js"></script>
 <script>
@@ -58,6 +60,9 @@ const stage=document.getElementById('stage'), cam=document.getElementById('cam')
       hud=document.getElementById('hud'), sub=document.getElementById('sub'), st=document.getElementById('st');
 let session=null, facing='environment', stream=null;
 let rot=0; try{ rot=+(localStorage.getItem('ponpon_rot')||0)||0; }catch(e){}
+let devId=null; try{ devId=localStorage.getItem('ponpon_cam')||null; }catch(e){}
+// シンプルモード: ネームプレート(Lv/HP)を隠し、AI検出も止める(字幕・エフェクトのみ)
+let simple=false; try{ simple=localStorage.getItem('ponpon_simple')==='1'; }catch(e){}
 function setRot(r){ rot=((r%360)+360)%360; try{ localStorage.setItem('ponpon_rot',String(rot)); }catch(e){} }
 function vdim(){ const r=rot%180!==0;
   return { vw: r?cam.videoHeight:cam.videoWidth, vh: r?cam.videoWidth:cam.videoHeight }; }
@@ -109,26 +114,63 @@ const PHRASES=[
 let phraseIdx=0, subTimer=null;
 
 // ---- カメラ ----
+const SIZE={width:{ideal:1920},height:{ideal:1080}};
 async function startCam(){
   if(stream) stream.getTracks().forEach(t=>t.stop());
   try{
-    try{
-      // 外カメ(environment)を厳密指定 — iOSがインカメを返すのを防ぐ
-      stream = await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:{exact:facing}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
-    }catch(err){
-      // 厳密指定が通らない環境(連係カメラ等)は緩い指定にフォールバック
-      stream = await navigator.mediaDevices.getUserMedia({
-        video:{facingMode:facing, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    if(devId){
+      // 保存済みのカメラを指定(Camo等)
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({video:Object.assign({deviceId:{exact:devId}},SIZE),audio:false});
+      }catch(err){ devId=null; }
+    }
+    if(!stream || !stream.active){
+      if(IS_DESKTOP){
+        stream = await navigator.mediaDevices.getUserMedia({video:SIZE,audio:false});
+      }else{
+        try{
+          stream = await navigator.mediaDevices.getUserMedia({video:Object.assign({facingMode:{exact:facing}},SIZE),audio:false});
+        }catch(err){
+          stream = await navigator.mediaDevices.getUserMedia({video:Object.assign({facingMode:facing},SIZE),audio:false});
+        }
+      }
     }
     cam.srcObject = stream; await cam.play();
-    hud.classList.add('hidden');
+    listCams();
+    if(!IS_DESKTOP) hud.classList.add('hidden');
     try{ await navigator.wakeLock.request('screen'); }catch(e){}
   }catch(e){ st.textContent='カメラ起動失敗: '+e.name; }
 }
+// 使えるカメラを一覧にしてセレクトへ
+async function listCams(){
+  try{
+    const sel=document.getElementById('camsel');
+    const cur=(stream&&stream.getVideoTracks()[0])?stream.getVideoTracks()[0].getSettings().deviceId:null;
+    const ds=await navigator.mediaDevices.enumerateDevices();
+    const vids=ds.filter(d=>d.kind==='videoinput');
+    sel.innerHTML='';
+    vids.forEach((d,i)=>{
+      const o=document.createElement('option');
+      o.value=d.deviceId; o.textContent=d.label||('カメラ '+(i+1));
+      if(d.deviceId===cur) o.selected=true;
+      sel.appendChild(o);
+    });
+  }catch(e){}
+}
+document.getElementById('camsel').onchange=e=>{
+  devId=e.target.value;
+  try{ localStorage.setItem('ponpon_cam',devId); }catch(_){}
+  startCam();
+};
 document.getElementById('start').onclick=startCam;
 document.getElementById('flip').onclick=()=>{facing = facing==='environment'?'user':'environment'; startCam();};
 document.getElementById('rotate').onclick=()=>setRot(rot+90);
+(function(){
+  const b=document.getElementById('simple');
+  const label=()=>b.textContent = simple ? 'プレート表示ON' : 'プレート非表示';
+  label();
+  b.onclick=()=>{ simple=!simple; try{ localStorage.setItem('ponpon_simple',simple?'1':'0'); }catch(e){} location.reload(); };
+})();
 
 // ---- モデル ----
 const CLS={15:'cat',16:'dog',21:'bear',77:'teddy'};
@@ -137,6 +179,7 @@ const MODEL = IS_DESKTOP ? 'model480.onnx' : 'model.onnx';
 const S = IS_DESKTOP ? 480 : 320;
 const DET_MS = IS_DESKTOP ? 110 : 200;
 (async()=>{
+  if(simple){ st.textContent=''; return; }
   try{
     ort.env.wasm.numThreads=1;
     ort.env.wasm.wasmPaths=new URL('ort/',document.baseURI).href;
@@ -151,6 +194,7 @@ const wctx=work.getContext('2d',{willReadFrequently:true});
 let busy=false, lastDet=0;
 
 async function detect(){
+  if(simple) return;
   if(!session||busy||cam.readyState<2) return;
   if(performance.now()-lastDet<DET_MS) return;
   busy=true; lastDet=performance.now();
@@ -212,7 +256,7 @@ function draw(){
   }
   const since=performance.now()-lastSeen;
   boxAlpha += ((box&&since<2500)?1:0 - boxAlpha)*0.12;
-  if(box&&boxAlpha>0.02){
+  if(!simple && box&&boxAlpha>0.02){
     const [sx,sy,sc]=v2s(box.x,box.y);
     const bw=box.w*sc;
     const topY=sy-box.h*sc/2;
