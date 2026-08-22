@@ -24,7 +24,7 @@
 </style>
 </head>
 <body>
-<h1>🎛 ぽんぽん操作パネル</h1>
+<h1>🎛 ぽんぽん操作パネル <span id="wsdot" style="font-size:12px;margin-left:8px;">○ 未接続</span></h1>
 <p class="warn">⚠ このウィンドウは配信に映さないこと(LIVE Studioでキャプチャするのはスタジオ画面のみ)。スタジオ画面と同じChromeで開くこと。</p>
 
 <h2>📜 口上(押すたびに1行ずつ画面に出る)</h2>
@@ -79,6 +79,20 @@
 <div id="log"></div>
 <script>
 const bc = new BroadcastChannel('ponpon');
+// スマホ等から使うとき用: 同じWi-Fi内のコネクタへWebSocketで送る
+let ws=null, wsOK=false;
+function wsHost(){ return (location.protocol==='http:' && location.hostname) ? location.hostname : 'localhost'; }
+function connectWS(){
+  try{ ws = new WebSocket('ws://'+wsHost()+':8765'); }catch(e){ return setTimeout(connectWS,5000); }
+  ws.onopen=()=>{ wsOK=true; mark(); };
+  ws.onclose=()=>{ wsOK=false; mark(); setTimeout(connectWS,5000); };
+  ws.onerror=()=>{ try{ws.close();}catch(e){} };
+}
+function mark(){
+  const el=document.getElementById('wsdot');
+  if(el){ el.textContent = wsOK ? '● 接続中' : '○ 未接続'; el.style.color = wsOK ? '#6fdd8b' : '#ff8a8a'; }
+}
+connectWS();
 const CATS = {
  "おねだり":[
   "おやつをよこせ、と言っています","ハートミーを要求しています","撫でてほしい、と言っています",
@@ -128,7 +142,9 @@ Object.entries(CATS).forEach(([cat,list])=>{
     pg.appendChild(b);
   });
 });
-function send(m){ bc.postMessage(m); log(JSON.stringify(m)); }
+function send(m){ try{ bc.postMessage(m); }catch(e){}
+  try{ if(ws && ws.readyState===1) ws.send(JSON.stringify(m)); }catch(e){}
+  log(JSON.stringify(m)); }
 function sendFree(){
   const t=document.getElementById('free').value.trim();
   if(t){ send({type:'subText',text:t}); document.getElementById('free').value=''; }
