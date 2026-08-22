@@ -107,8 +107,15 @@ let phraseIdx=0, subTimer=null;
 async function startCam(){
   if(stream) stream.getTracks().forEach(t=>t.stop());
   try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video:{facingMode:facing, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    try{
+      // 外カメ(environment)を厳密指定 — iOSがインカメを返すのを防ぐ
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:{exact:facing}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    }catch(err){
+      // 厳密指定が通らない環境(連係カメラ等)は緩い指定にフォールバック
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{facingMode:facing, width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    }
     cam.srcObject = stream; await cam.play();
     hud.classList.add('hidden');
     try{ await navigator.wakeLock.request('screen'); }catch(e){}
