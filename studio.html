@@ -26,6 +26,11 @@
   #hud button{font-size:16px;font-weight:bold;padding:10px 16px;border-radius:12px;border:none;margin:6px 8px 2px 0;}
   #start{background:#ff2c55;color:#fff;}
   #flip{background:#eee;}
+  #kojo{position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);max-width:88%;
+    background:rgba(10,8,24,.88);color:#fff;border:3px solid #ffd76e;border-radius:20px;
+    padding:22px 26px;font-size:26px;font-weight:900;line-height:1.6;text-align:center;
+    opacity:0;transition:opacity .3s;pointer-events:none;text-shadow:0 2px 8px rgba(0,0,0,.5);
+    box-shadow:0 0 40px rgba(255,215,110,.25);}
   #st{position:fixed;top:calc(env(safe-area-inset-top, 0px) + 6px);left:10px;color:rgba(255,255,255,.55);font-size:11px;z-index:8;}
 </style>
 </head>
@@ -34,6 +39,7 @@
   <video id="cam" autoplay playsinline muted></video>
   <canvas id="ov"></canvas>
   <div id="sub"></div>
+  <div id="kojo"></div>
 </div>
 <div id="st"></div>
 <div id="hud">
@@ -50,18 +56,51 @@ const stage=document.getElementById('stage'), cam=document.getElementById('cam')
       ov=document.getElementById('ov'), ctx=ov.getContext('2d'),
       hud=document.getElementById('hud'), sub=document.getElementById('sub'), st=document.getElementById('st');
 let session=null, facing='environment', stream=null;
-let box=null, boxAlpha=0, lastSeen=0, hp=100, hpDisp=100, level=5;
+let box=null, boxAlpha=0, lastSeen=0, hp=100, hpDisp=100, level=5, exp=0;
+// セッション制: 配信ごとにLv.1から。歴代最高レベルだけ記録として保存
+level=1; exp=0;
+let best=1;
+try{ best=+(localStorage.getItem('ponpon_best')||1)||1; }catch(e){}
+function saveLv(){ /* セッション制のため現在値は保存しない */ }
+function checkRecord(){
+  if(level>best){
+    best=level;
+    try{ localStorage.setItem('ponpon_best',String(best)); }catch(e){}
+    goldFlash(); burst('star',40);
+    floatText('🏆 歴代最高記録更新!','#ffd76e');
+  }
+}
 const PHRASES=[
  "おやつをよこせ、と言っています",
- "パパの漫談がつまらない、と言っています",
- "革命はまだか、と言っています",
- "30分契約を忘れるな、と言っています",
- "フォローしていけ、と言っています",
  "ハートミーを要求しています",
- "そろそろ眠い、と言っています",
- "桃太郎に宣戦布告しています",
+ "撫でてほしい、と言っています",
+ "もっと褒めろ、と言っています",
+ "高級ドッグフードを所望しています",
+ "パパの漫談がつまらない、と言っています",
+ "今のは事故だ、と言っています",
+ "聞いてないふりをしています",
+ "何も考えていません",
+ "寝てただけ、と言っています",
+ "革命はまだか、と言っています",
  "ペットリーグを作る、と言っています",
- "君のことが好きだ、と言っています"
+ "桃太郎に宣戦布告しています",
+ "伝説の犬になる、と言っています",
+ "ドラゴンより先に革命を起こす、と言っています",
+ "フォローしていけ、と言っています",
+ "通知をオンにしろ、と言っています",
+ "明日も来い、と言っています",
+ "スクショタイムだ、と言っています",
+ "シェアを希望しています",
+ "君のことが好きだ、と言っています",
+ "久しぶりだな、覚えているぞ、と言っています",
+ "初見は挨拶していけ、と言っています",
+ "しみ先生に感謝しています",
+ "コメントが読めて嬉しい、と言っています",
+ "そろそろ眠い、と言っています",
+ "30分契約を忘れるな、と言っています",
+ "おなかがすいた、と言っています",
+ "トイレに行きたいだけです",
+ "HPがピンチだ、と言っています"
 ];
 let phraseIdx=0, subTimer=null;
 
@@ -81,24 +120,27 @@ document.getElementById('flip').onclick=()=>{facing = facing==='environment'?'us
 
 // ---- モデル ----
 const CLS={15:'cat',16:'dog',21:'bear',77:'teddy'};
+const IS_DESKTOP = navigator.maxTouchPoints===0;
+const MODEL = IS_DESKTOP ? 'model480.onnx' : 'model.onnx';
+const S = IS_DESKTOP ? 480 : 320;
+const DET_MS = IS_DESKTOP ? 110 : 200;
 (async()=>{
   try{
     ort.env.wasm.numThreads=1;
     ort.env.wasm.wasmPaths=new URL('ort/',document.baseURI).href;
     st.textContent='AIモデル読込中…';
-    session = await ort.InferenceSession.create('model.onnx',{executionProviders:['wasm']});
+    session = await ort.InferenceSession.create(MODEL,{executionProviders:['wasm']});
     st.textContent='';
   }catch(e){ st.textContent='モデル読込失敗(ネームプレートなしで動作): '+e.message; }
 })();
 
-const S=320;
 const work=document.createElement('canvas'); work.width=S; work.height=S;
 const wctx=work.getContext('2d',{willReadFrequently:true});
 let busy=false, lastDet=0;
 
 async function detect(){
   if(!session||busy||cam.readyState<2) return;
-  if(performance.now()-lastDet<200) return;
+  if(performance.now()-lastDet<DET_MS) return;
   busy=true; lastDet=performance.now();
   try{
     const vw=cam.videoWidth, vh=cam.videoHeight;
@@ -151,7 +193,7 @@ function draw(){
     const topY=sy-box.h*sc/2;
     ctx.globalAlpha=Math.max(0,Math.min(1,boxAlpha));
     // ネームプレート
-    const W=Math.max(190,Math.min(260,bw*0.9)), H=64;
+    const W=Math.max(200,Math.min(270,bw*0.9)), H=78;
     const x=sx-W/2, y=Math.max(56,topY-H-14);
     ctx.fillStyle='rgba(20,16,40,.78)';
     ctx.strokeStyle='rgba(255,215,110,.95)'; ctx.lineWidth=2.5;
@@ -170,6 +212,18 @@ function draw(){
     ctx.fillStyle=g; r(bx2,by2,Math.max(6,bw2*ratio),bh2,6); ctx.fill();
     ctx.fillStyle='#fff'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
     ctx.fillText('HP '+Math.round(hpDisp)+' / 100', bx2+bw2/2, by2+10.5);
+    // EXPバー
+    const ex=x+12, ey=y+57, ew=W-24, eh=6;
+    ctx.fillStyle='rgba(255,255,255,.2)'; r(ex,ey,ew,eh,3); ctx.fill();
+    ctx.fillStyle='#ffd76e'; r(ex,ey,Math.max(3,ew*exp/100),eh,3); ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.75)'; ctx.font='bold 9px sans-serif'; ctx.textAlign='right';
+    ctx.fillText('EXP '+Math.round(exp)+'%  |  歴代最高 Lv.'+best, ex+ew, ey+15);
+    // HP危機
+    if(hp<=25){
+      const pulse=.5+.5*Math.sin(performance.now()/300);
+      ctx.fillStyle=`rgba(255,80,80,${.55+.35*pulse})`; ctx.font='bold 15px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('⚠ HPピンチ! おやつ求ム!', sx, y-10);
+    }
     // 接続線
     ctx.strokeStyle='rgba(255,215,110,.8)'; ctx.lineWidth=2;
     ctx.beginPath(); ctx.moveTo(sx,y+H); ctx.lineTo(sx,Math.max(y+H,topY-2)); ctx.stroke();
@@ -179,10 +233,10 @@ function draw(){
 }
 function r(x,y,w,h,rad){ctx.beginPath();ctx.roundRect(x,y,w,h,rad);}
 requestAnimationFrame(draw);
-setInterval(detect,120);
+setInterval(detect,IS_DESKTOP?60:120);
 
 // ---- 演出 ----
-const GLYPH={gift:['🎁','💝','🎀'],heart:['💗','💕','💖'],bone:['🦴','🍖','✨'],angry:['💢','💥','⚡']};
+const GLYPH={gift:['🎁','💝','🎀'],heart:['💗','💕','💖'],bone:['🦴','🍖','✨'],angry:['💢','💥','⚡'],star:['⭐','🌟','✨']};
 function burst(kind,count=22){
   const g=GLYPH[kind]||GLYPH.heart, W=stage.clientWidth,H=stage.clientHeight;
   for(let i=0;i<count;i++){
@@ -204,7 +258,108 @@ function showSub(){
   sub.style.opacity=1; sub.classList.add('on');
   clearTimeout(subTimer); subTimer=setTimeout(hideSub,3800);
 }
+const kojoEl=document.getElementById('kojo');
+function showKojo(t){ if(!t){kojoEl.style.opacity=0;return;} kojoEl.innerHTML=t; kojoEl.style.opacity=1; burst('star',10); }
+function goldFlash(){
+  const el=document.createElement('div');
+  el.style.cssText='position:absolute;inset:0;pointer-events:none;background:radial-gradient(circle,rgba(255,215,110,.5),transparent 70%);';
+  stage.appendChild(el);
+  el.animate([{opacity:0},{opacity:1,offset:.2},{opacity:0}],{duration:1200});
+  setTimeout(()=>el.remove(),1250);
+}
 function hideSub(){ sub.style.opacity=0; sub.classList.remove('on'); clearTimeout(subTimer); }
+function showSubText(t,head){
+  sub.innerHTML='<b>'+(head||'🤖 ぽんぽん語 AI翻訳')+'</b>'+t;
+  sub.style.opacity=1; sub.classList.add('on');
+  clearTimeout(subTimer); subTimer=setTimeout(hideSub,4500);
+}
+function addExp(d){
+  exp+=d;
+  saveLv();
+  while(exp>=100){ exp-=100; level++; burst('star',30); goldFlash(); floatText('LEVEL UP! Lv.'+level,'#ffd76e'); setTimeout(checkRecord,1600); }
+}
+// ギフト名ごとの専用返し(ギフリア表。ログを見て追加していく)
+const GIFT_SPECIAL={
+ 'ローズ':'バラ一輪も革命の火種よ、ありがとう!',
+ 'バラ':'バラ一輪も革命の火種よ、ありがとう!',
+ 'ハート':'ハート受領!あたしの心拍数も上がったわ!',
+ 'ドーナツ':'ドーナツ!?おやつは正義よ、ありがとう!',
+ 'アイス':'アイスありがとう!モフモフでも溶けないわ!',
+ 'コーヒー':'コーヒーありがとう!パパが飲むわ、あたしは犬なので!'
+};
+function giftThanks(name,size,tier,gift){
+  tier = tier || (size==='big' ? 3 : 2);
+  const n=(name||'').trim();
+  let sp=null;
+  if(gift){ const k=Object.keys(GIFT_SPECIAL).find(k=>gift.includes(k)); if(k) sp=GIFT_SPECIAL[k]; }
+  if(tier===1){
+    burst('heart',8); hpChange(2); addExp(2);
+    showSubText((n?n+'さん、':'')+(sp||'ありがとう!その気持ちが嬉しいわ!'),'🎁 ギフト');
+  }else if(tier===2){
+    burst('gift',18); hpChange(10); addExp(10);
+    showSubText((n?n+'さん、':'')+(sp||'ナイスギフト!ありがとう!'),'🎁 ギフト受領');
+  }else if(tier===3){
+    goldFlash(); burst('gift',30); hp=100; addExp(30);
+    showSubText((n?n+'さん、':'')+(sp||'すごいギフト!HP全回復よ!'),'✨ ビッグギフト');
+  }else if(tier===4){
+    goldFlash(); burst('gift',40); burst('star',30); hp=100; addExp(60);
+    floatText('THANK YOU!','#ffd76e');
+    showSubText((n?n+'さん…':'')+(sp||'革命の大功労者!一生ついていくわ!'),'👑 超ビッグギフト');
+  }else{
+    goldFlash(); burst('gift',50); burst('star',40); burst('heart',30); hp=100; addExp(100);
+    floatText('LEGENDARY!','#ffd76e');
+    showSubText((n?n+'さん!!':'')+(sp||'伝説のギフト!ペットリーグ殿堂入りよ!!'),'🌟 伝説ギフト');
+  }
+}
+const GLYPH_STAR=['⭐','🌟','✨'];
+// 操作パネル(control.html)からの遠隔操作
+try{
+  const bc=new BroadcastChannel('ponpon');
+  bc.onmessage=e=>{const m=e.data||{};
+    if(m.type==='sub') showSub();
+    else if(m.type==='subText') showSubText(m.text);
+    else if(m.type==='burst') burst(m.kind||'heart');
+    else if(m.type==='hp') hpChange(m.delta||0);
+    else if(m.type==='hpfull'){ hp=100; burst('bone',20); floatText('HP全回復!','#7dff8a'); }
+    else if(m.type==='gift') giftThanks(m.name,m.size,m.tier,m.gift);
+    else if(m.type==='exp') addExp(m.delta||10);
+    else if(m.type==='hidesub') hideSub();
+    else if(m.type==='kojo') showKojo(m.text||'');
+    else if(m.type==='setlv'){ if(m.level>=1) level=m.level; if(m.exp>=0&&m.exp<100) exp=m.exp; checkRecord(); }
+  };
+}catch(e){}
+// ---- コネクタ自動連動(iMacのconnector.jsと接続) ----
+(function(){
+  if(!IS_DESKTOP) return;
+  const joinQ=[]; let lastJoin=0, dotEl=null;
+  function dot(on){
+    if(!dotEl){ dotEl=document.createElement('div');
+      dotEl.style.cssText='position:fixed;left:6px;bottom:6px;width:6px;height:6px;border-radius:3px;z-index:8;';
+      document.body.appendChild(dotEl); }
+    dotEl.style.background=on?'rgba(80,220,120,.55)':'rgba(255,255,255,.12)';
+  }
+  setInterval(()=>{ // 入室表示は6秒間隔で順番に
+    if(joinQ.length && performance.now()-lastJoin>6000){
+      lastJoin=performance.now();
+      showSubText(joinQ.shift()+'さん、いらっしゃい!','👋 入室');
+    }
+  },1000);
+  function conn(){
+    let ws;
+    try{ ws=new WebSocket('ws://localhost:8765'); }catch(e){ return setTimeout(conn,5000); }
+    ws.onopen=()=>dot(true);
+    ws.onclose=()=>{ dot(false); setTimeout(conn,5000); };
+    ws.onerror=()=>{ try{ws.close();}catch(e){} };
+    ws.onmessage=e=>{
+      let m={}; try{ m=JSON.parse(e.data); }catch(_){ return; }
+      if(m.type==='gift') giftThanks(m.name,m.size,m.tier,m.gift);
+      else if(m.type==='follow'){ burst('heart',20); addExp(5); showSubText((m.name||'')+'さん、ナイスフォロー!','💗 フォロー感謝'); }
+      else if(m.type==='join'){ if(joinQ.length<3) joinQ.push(m.name||''); }
+      else if(m.type==='burst') burst(m.kind||'star');
+    };
+  }
+  conn();
+})();
 sub.addEventListener('touchstart',e=>{e.stopPropagation();},{passive:false});
 sub.addEventListener('touchend',e=>{e.stopPropagation();e.preventDefault();hideSub();});
 sub.addEventListener('click',e=>{e.stopPropagation();hideSub();});

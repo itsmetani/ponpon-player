@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ぽんぽん操作パネル</title>
+<style>
+  body{margin:0;background:#14101f;color:#fff;font-family:sans-serif;padding:14px;}
+  h1{font-size:16px;color:#ffd76e;margin:0 0 4px;}
+  .warn{font-size:12px;color:#ff8a8a;margin:0 0 12px;}
+  h2{font-size:13px;color:#9ad;margin:14px 0 6px;border-bottom:1px solid #333;padding-bottom:3px;}
+  .grid{display:flex;flex-wrap:wrap;gap:6px;}
+  button{font-size:14px;font-weight:bold;padding:10px 12px;border-radius:10px;border:none;
+    background:#2a2440;color:#fff;cursor:pointer;}
+  button:active{background:#4a3f6e;}
+  button.big{background:#ff2c55;}
+  button.gold{background:#b8860b;}
+  button.green{background:#1e7d46;}
+  button.red{background:#8b2635;}
+  input{font-size:14px;padding:9px;border-radius:8px;border:1px solid #555;background:#0e0b16;color:#fff;}
+  #name{width:150px;} #free{width:min(420px,90%);}
+  #log{font-size:11px;color:#888;margin-top:14px;line-height:1.7;}
+</style>
+</head>
+<body>
+<h1>🎛 ぽんぽん操作パネル</h1>
+<p class="warn">⚠ このウィンドウは配信に映さないこと(LIVE Studioでキャプチャするのはスタジオ画面のみ)。スタジオ画面と同じChromeで開くこと。</p>
+
+<h2>📜 口上(押すたびに1行ずつ画面に出る)</h2>
+<div class="grid">
+  <button class="big" id="kojoBtn" onclick="kojoNext()">口上 開始</button>
+  <button class="red" onclick="kojoEnd()">口上を消す</button>
+</div>
+
+<h2>🤖 AI翻訳字幕(語録)</h2>
+<div class="grid" id="phrases"></div>
+<div class="grid" style="margin-top:6px;">
+  <input id="free" placeholder="自由入力の字幕(その場のアドリブ)">
+  <button onclick="sendFree()">送信</button>
+  <button class="red" onclick="send({type:'hidesub'})">字幕を消す</button>
+</div>
+
+<h2>🎁 ギフト対応(名前を入れて押すと感謝演出+HP/EXP反映)</h2>
+<div class="grid">
+  <input id="name" placeholder="投げた人の名前">
+  <button onclick="gift(1)">T1 バラ級 1〜9</button>
+  <button class="green" onclick="gift(2)">T2 10〜99</button>
+  <button class="gold" onclick="gift(3)">T3 100〜999</button>
+  <button class="big" onclick="gift(4)">T4 1000〜</button>
+  <button class="big" onclick="gift(5)">T5 伝説 10000〜</button>
+</div>
+
+<h2>💗 HP(おやつ経済)</h2>
+<div class="grid">
+  <button class="green" onclick="send({type:'hp',delta:2})">コメント「おやつ」 +2</button>
+  <button class="green" onclick="send({type:'hp',delta:20})">おやつタイム +20</button>
+  <button class="gold" onclick="send({type:'hpfull'})">全回復</button>
+  <button class="red" onclick="send({type:'hp',delta:-15})">ダメージ -15</button>
+</div>
+
+<h2>✨ 演出</h2>
+<div class="grid">
+  <button onclick="send({type:'burst',kind:'gift'})">🎁 ギフト</button>
+  <button onclick="send({type:'burst',kind:'heart'})">💗 ハート</button>
+  <button onclick="send({type:'burst',kind:'star'})">⭐ キラ</button>
+  <button onclick="send({type:'burst',kind:'bone'})">🦴 おやつ</button>
+  <button onclick="send({type:'burst',kind:'angry'})">💢 怒り</button>
+  <button class="gold" onclick="send({type:'exp',delta:25})">EXP +25</button>
+</div>
+
+<h2>🎚 Lv/EXP手動設定(リカバリ用。通常は触らない)</h2>
+<div class="grid">
+  <input id="lvIn" type="number" placeholder="Lv" style="width:70px">
+  <input id="expIn" type="number" placeholder="EXP%" style="width:80px">
+  <button onclick="send({type:'setlv',level:+document.getElementById('lvIn').value||undefined,exp:document.getElementById('expIn').value===''?undefined:+document.getElementById('expIn').value})">設定</button>
+</div>
+
+<div id="log"></div>
+<script>
+const bc = new BroadcastChannel('ponpon');
+const CATS = {
+ "おねだり":[
+  "おやつをよこせ、と言っています","ハートミーを要求しています","撫でてほしい、と言っています",
+  "もっと褒めろ、と言っています","高級ドッグフードを所望しています"],
+ "ボケ・ツッコミ":[
+  "パパの漫談がつまらない、と言っています","今のは事故だ、と言っています","聞いてないふりをしています",
+  "何も考えていません","寝てただけ、と言っています","トイレに行きたいだけです"],
+ "革命・世界観":[
+  "革命はまだか、と言っています","ペットリーグを作る、と言っています","桃太郎に宣戦布告しています",
+  "伝説の犬になる、と言っています","ドラゴンより先に革命を起こす、と言っています"],
+ "営業":[
+  "フォローしていけ、と言っています","通知をオンにしろ、と言っています","明日も来い、と言っています",
+  "スクショタイムだ、と言っています","シェアを希望しています"],
+ "交流":[
+  "君のことが好きだ、と言っています","久しぶりだな、覚えているぞ、と言っています","初見は挨拶していけ、と言っています",
+  "しみ先生に感謝しています","コメントが読めて嬉しい、と言っています"],
+ "状態":[
+  "そろそろ眠い、と言っています","30分契約を忘れるな、と言っています","おなかがすいた、と言っています",
+  "HPがピンチだ、と言っています"]
+};
+const KOJO = [
+ "我が名は <span style='color:#ffd76e'>ぽんぽん</span>",
+ "ただのポメラニアンではない——",
+ "目的はただ <span style='color:#ffd76e'>2つ</span>",
+ "① TikTokに<br><span style='color:#ffd76e'>『ペットリーグ』</span>を作る",
+ "② 2027年<br><span style='color:#ffd76e'>インターペットアンバサダー</span>を<br>母・桃太郎から奪取する",
+ "あたしこそが——<br><span style='color:#ffd76e'>モフモフの革命家</span>である",
+ "フォローして<br>革命の目撃者になれ🐾"
+];
+let kojoIdx = -1;
+function kojoNext(){
+  kojoIdx++;
+  if(kojoIdx >= KOJO.length){ kojoEnd(); return; }
+  send({type:'kojo', text:KOJO[kojoIdx]});
+  document.getElementById('kojoBtn').textContent = kojoIdx+1 < KOJO.length ? `口上 次へ (${kojoIdx+2}/${KOJO.length})` : '口上 終了';
+}
+function kojoEnd(){ kojoIdx=-1; send({type:'kojo', text:''}); document.getElementById('kojoBtn').textContent='口上 開始'; }
+const pg=document.getElementById('phrases');
+Object.entries(CATS).forEach(([cat,list])=>{
+  const label=document.createElement('div');
+  label.style.cssText='width:100%;font-size:11px;color:#8aa;margin-top:4px;';
+  label.textContent='― '+cat;
+  pg.appendChild(label);
+  list.forEach(p=>{
+    const b=document.createElement('button');
+    b.textContent=p.replace('、と言っています','').replace('しています','');
+    b.onclick=()=>send({type:'subText',text:p});
+    pg.appendChild(b);
+  });
+});
+function send(m){ bc.postMessage(m); log(JSON.stringify(m)); }
+function sendFree(){
+  const t=document.getElementById('free').value.trim();
+  if(t){ send({type:'subText',text:t}); document.getElementById('free').value=''; }
+}
+document.getElementById('free').addEventListener('keydown',e=>{if(e.key==='Enter')sendFree();});
+function gift(tier){ send({type:'gift',name:document.getElementById('name').value,tier}); }
+function log(s){ const l=document.getElementById('log'); l.innerHTML=('送信: '+s+'<br>')+l.innerHTML.split('<br>').slice(0,5).join('<br>'); }
+</script>
+</body>
+</html>
