@@ -10,7 +10,12 @@
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:sans-serif;
     -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;}
-  #stage{position:relative;width:100vw;height:100dvh;overflow:hidden;background:#000;touch-action:none;}
+  body{display:flex;align-items:center;justify-content:center;height:100dvh;}
+  /* 窓の形に関係なく、配信と同じ9:16の縦枠で表示する */
+  #stage{position:relative;overflow:hidden;background:#000;touch-action:none;
+    width:min(100vw, calc(100dvh * 9 / 16));
+    height:min(100dvh, calc(100vw * 16 / 9));
+    flex:none;}
   #cam{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;pointer-events:none;}
   #ov{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
   .p{position:absolute;will-change:transform,opacity;pointer-events:none;font-size:34px;}
